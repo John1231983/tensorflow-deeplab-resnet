@@ -112,7 +112,11 @@ def main(data_dir=DATA_DIRECTORY, data_list=DATA_LIST_PATH, save_dir=ACTV_SAVE_D
         f = open(data_list, 'r')
         image_names = []
         for line in f:
-            image_names.append(line)
+            try:
+                img, _ = line.strip("\n").split(' ')
+            except ValueError:
+                img = _ = line.strip("\n")
+            image_names.append(img)
         f.close()
 
         # Iterate over training steps.
@@ -122,7 +126,7 @@ def main(data_dir=DATA_DIRECTORY, data_list=DATA_LIST_PATH, save_dir=ACTV_SAVE_D
             f_name = save_dir + "/" + base_fname
             np.savez(f_name, activations)
             if (step % 100 == 0):
-                print('Processed {:d}/{:d}'.format(step. num_steps))
+                print('Processed {:d}/{:d}'.format(step, num_steps))
 
         print('Activations are stored at: %s'%(save_dir))
 

@@ -209,7 +209,7 @@ def main():
 
     hard_samples.main(data_dir=args.data_dir, data_list=args.data_list,\
                       save_list=new_data_hard_list_pmodel, num_steps=iterations,\
-                      max_save=MAX_SAVE, restore_from=args.restore_from)
+                      max_save=args.max_save, restore_from=args.restore_from)
 
     #######################################################################
     # Calculate activations of old model on all the hard-samples
@@ -246,7 +246,7 @@ def main():
     iterations = get_file_len(total_samples_list_new_model)
     model = args.snapshot_dir + '/' + 'model.ckpt-5000' #TODO: Fix this
     hard_samples.main(data_dir=args.data_dir, data_list=total_samples_list_new_model,\
-                     save_list=args.new_data_list, num_steps=iterations, max_save=MAX_SAVE,\
+                     save_list=args.new_data_list, num_steps=iterations, max_save=args.max_save,\
                      restore_from=model)
 
     # Clean the intermediata temporary directory

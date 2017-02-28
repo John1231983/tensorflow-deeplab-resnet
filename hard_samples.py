@@ -123,7 +123,7 @@ def main(data_dir=DATA_DIRECTORY, data_list=DATA_LIST_PATH, save_list=SAVE_LIST_
         for step in range(num_steps):
             preds_entropy[step] = sess.run(pred_entropy)
             if (step % 100 == 0):
-                print('Processed {:d}/{:d}'.format(step. num_steps))
+                print('Processed {:d}/{:d}'.format(step, num_steps))
 
         # Sort the entropy list in descending order
         indices = preds_entropy.argsort()[::-1]
@@ -148,3 +148,4 @@ def main(data_dir=DATA_DIRECTORY, data_list=DATA_LIST_PATH, save_list=SAVE_LIST_
     
 if __name__ == '__main__':
     main()
+
