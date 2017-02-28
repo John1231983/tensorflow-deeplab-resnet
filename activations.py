@@ -20,11 +20,10 @@ from deeplab_resnet import DeepLabResNetModel, ImageReader, prepare_label
 n_classes = 21
 
 DATA_DIRECTORY = '/home/VOCdevkit'
+ACTV_SAVE_DIR = './tmp_activations'
 DATA_LIST_PATH = './dataset/train.txt'
-SAVE_LIST_PATH = './dataset/hard_samples.txt'
 NUM_STEPS = 10582 
 RESTORE_FROM = './deeplab_resnet.ckpt'
-MAX_SAVE = 200
 
 RANDOM_SEED = 1234
 
@@ -39,7 +38,7 @@ def load(saver, sess, ckpt_path):
     saver.restore(sess, ckpt_path)
     print("Restored model parameters from {}".format(ckpt_path))
 
-def main(data_dir=DATA_DIRECTORY, data_list=DATA_LIST_PATH, save_list=SAVE_LIST_PATH, num_steps=NUM_STEPS, max_save=MAX_SAVE, restore_from=RESTORE_FROM):
+def main(data_dir=DATA_DIRECTORY, data_list=DATA_LIST_PATH, save_dir=ACTV_SAVE_DIR, num_steps=NUM_STEPS, restore_from=RESTORE_FROM):
     """Create the model and start the evaluation process."""
 
     graph = tf.Graph()
@@ -61,6 +60,9 @@ def main(data_dir=DATA_DIRECTORY, data_list=DATA_LIST_PATH, save_list=SAVE_LIST_
                 False, # No random mirror.
                 coord)
             image, label = reader.image, reader.label
+
+        # Define a placeholder for temperature variable
+        Temp = tf.placeholder(shape=None, dtype=tf.float32)
 
         image_batch, label_batch = tf.expand_dims(image, dim=0), tf.expand_dims(label, dim=0) # Add one batch dimension.
         h_orig, w_orig = tf.to_float(tf.shape(image_batch)[1]), tf.to_float(tf.shape(image_batch)[2])
@@ -85,12 +87,9 @@ def main(data_dir=DATA_DIRECTORY, data_list=DATA_LIST_PATH, save_list=SAVE_LIST_
     
         raw_output = tf.reduce_max(tf.stack([raw_output100, raw_output075, raw_output05]), axis=0)
         raw_output_up = tf.image.resize_bilinear(raw_output, tf.shape(image_batch)[1:3,])
-    
-        # Calculate hard-samples based on entropy of the predictions
-        logits = tf.reshape(raw_output_up, [-1, n_classes])
-        pred_probs = tf.nn.softmax(logits)
-        pred_entropy = tf.reduce_mean(-tf.reduce_sum(pred_probs *
-                                                 tf.log(pred_probs), axis=1))
+
+        # Soft targets at increased temperature
+        raw_activations = tf.nn.softmax(raw_output_up/ Temp)
 
     # Set up tf session and initialize variables. 
     config = tf.ConfigProto()
@@ -108,7 +107,7 @@ def main(data_dir=DATA_DIRECTORY, data_list=DATA_LIST_PATH, save_list=SAVE_LIST_
     
         # Start queue threads.
         threads = tf.train.start_queue_runners(coord=coord, sess=sess)
-   
+
         # Get the file names from the list
         f = open(data_list, 'r')
         image_names = []
@@ -116,32 +115,16 @@ def main(data_dir=DATA_DIRECTORY, data_list=DATA_LIST_PATH, save_list=SAVE_LIST_
             image_names.append(line)
         f.close()
 
-        # Array to store the entropies
-        preds_entropy = np.zeros(num_steps)
-
         # Iterate over training steps.
         for step in range(num_steps):
-            preds_entropy[step] = sess.run(pred_entropy)
+            activations = sess.run(raw_activations, feed_dict={Temp:2})
+            base_fname = image_names[step].strip("\n").rsplit('/', 1)[1].replace('jpg', 'npz')
+            f_name = save_dir + "/" + base_fname
+            np.savez(f_name, activations)
             if (step % 100 == 0):
                 print('Processed {:d}/{:d}'.format(step. num_steps))
 
-        # Sort the entropy list in descending order
-        indices = preds_entropy.argsort()[::-1]
-
-        # Save the difficult samples to a file
-        if os.path.isfile(save_list):
-            print('File %s is already present. Deleting it...'%(save_list))
-            os.remove(save_list)
-
-        hard_samples_list = open(save_list, "w")
-
-        for i in range(max_save):
-            img = image_names[indices[i]]
-            hard_samples_list.write(img)
-
-        hard_samples_list.close()
-
-        print('Hard samples list is saved at: %s'%(save_list))
+        print('Activations are stored at: %s'%(save_dir))
 
         coord.request_stop()
         coord.join(threads)

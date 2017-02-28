@@ -166,6 +166,10 @@ def main():
     fc_b_trainable = [v for v in fc_trainable if 'biases' in v.name] # lr * 20.0
     assert(len(all_trainable) == len(fc_trainable) + len(conv_trainable))
     assert(len(fc_trainable) == len(fc_w_trainable) + len(fc_b_trainable))
+
+    # Add histogram of all variables
+    for v in conv_trainable + fc_w_trainable + fc_b_trainable:
+        tf.summary.histogram(v.name.replace(":", "_"), v)
     
     
     # Predictions: ignoring all predictions with labels greater or equal than n_classes
@@ -203,7 +207,10 @@ def main():
     loss05 = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=prediction05, labels=gt05)
     l2_losses = [args.weight_decay * tf.nn.l2_loss(v) for v in tf.trainable_variables() if 'weights' in v.name]
     reduced_loss = tf.reduce_mean(loss) + tf.reduce_mean(loss100) + tf.reduce_mean(loss075) + tf.reduce_mean(loss05) + tf.add_n(l2_losses)
-    
+   
+    # Add loss to summary
+    tf.summary.scalar("loss", reduced_loss)
+
     # Processed predictions: for visualisation.
     raw_output_up = tf.image.resize_bilinear(raw_output, tf.shape(image_batch)[1:3,])
     raw_output_up = tf.argmax(raw_output_up, dimension=3)
@@ -215,8 +222,10 @@ def main():
     preds_summary = tf.py_func(decode_labels, [pred, args.save_num_images], tf.uint8)
     
     total_summary = tf.summary.image('images', 
-                                     tf.concat(2, [images_summary, labels_summary, preds_summary]), 
-                                     max_outputs=args.save_num_images) # Concatenate row-wise.
+                                    tf.concat(2, [images_summary, labels_summary, preds_summary]), 
+                                    max_outputs=args.save_num_images) # Concatenate row-wise.
+
+    merged_summary = tf.summary.merge_all()
     summary_writer = tf.summary.FileWriter(args.snapshot_dir,
                                            graph=tf.get_default_graph())
    
@@ -275,7 +284,7 @@ def main():
     threads = tf.train.start_queue_runners(coord=coord, sess=sess)
 
     # Iterate over training steps.
-    for step in range(args.num_steps):
+    for step in range(4001, args.num_steps):
         start_time = time.time()
         feed_dict = { step_ph : step }
         loss_value = 0
@@ -293,11 +302,13 @@ def main():
 
         # Apply gradients.
         if step % args.save_pred_every == 0:
-            images, labels, summary, _ = sess.run([image_batch, label_batch, total_summary, train_op], feed_dict=feed_dict)
+            images, labels, summary, _ = sess.run([image_batch, label_batch,
+                                                   merged_summary, train_op], feed_dict=feed_dict)
             summary_writer.add_summary(summary, step)
             save(saver, sess, args.snapshot_dir, step)
         else:
-            sess.run(train_op, feed_dict=feed_dict)
+            _, summary = sess.run([train_op, merged_summary], feed_dict=feed_dict)
+            summary_writer.add_summary(summary, step)
 
         duration = time.time() - start_time
         print('step {:d} \t loss = {:.3f}, ({:.3f} sec/step)'.format(step, loss_value, duration))
