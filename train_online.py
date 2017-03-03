@@ -26,7 +26,10 @@ DATA_LIST = './dataset/train.txt'
 NUM_STEPS = 20001
 RESTORE_FROM = './deeplab_resnet.ckpt'
 SNAPSHOT_DIR = './snapshots/'
+SAVE_PRED_EVERY = 1000
 MAX_SAVE = 100
+
+INPUT_SIZE = '321,321'
 
 SAVE_LIST_PATH_OLD = './dataset/universal_hard_old.txt'
 SAVE_LIST_PATH_NEW = './dataset/universal_hard_new.txt'
@@ -36,7 +39,10 @@ NEW_HARD_SAMPLES_PREV_MODEL = 'new_hard_samples_prev_model.txt'
 COMBINED_HARD_SAMPLES_PREV_MODEL = 'comb_hard_samples_prev_model.txt'
 TOTAL_SAMPLES_FOR_NEW_MODEL = 'total_samples_new_model.txt'
 COMBINED_ACTV_WITH_IMG_AND_MSK = 'combined_actv_with_img_and_msk.txt'
+COMBINED_LIST_OLD_NEW = 'combined_list_old_new.txt'
 TEMP_ACTV_SAVE_DIR = 'activations'
+
+RANDOM_SEED = 1234 
 
 DEFAULT_ACTV_FILE = '0000_000000.npz'
 
@@ -64,7 +70,7 @@ def get_file_path(data_dir, data_list):
     Outputs:
         Path to the file
     """
-    return data_dir + "/" + data_list 
+    return data_dir.rstrip('\/') + "/" + data_list 
 
 def combine_files(output_file, input_file1, intput_file2):
     """Combines any two files into a third file
@@ -180,6 +186,8 @@ def get_arguments():
                         help="Number of training steps.")
     parser.add_argument("--max-save", type=int, default=MAX_SAVE,
                         help="Maximum number of hardsamples to store.")
+    parser.add_argument("--save-pred-every", type=int, default=SAVE_PRED_EVERY,
+                        help="Number of iterations after which model is stored.")
     parser.add_argument("--restore-from", type=str, default=RESTORE_FROM,
                         help="Where restore model parameters from.")
     parser.add_argument("--snapshot-dir", type=str, default=SNAPSHOT_DIR,
@@ -195,6 +203,10 @@ def main():
     """
     # Get the command-line arguments
     args = get_arguments()
+
+    # Get input crop size
+    h, w = map(int, INPUT_SIZE.split(','))
+    input_size = (h, w)
 
     # Create tmp data directory to store intermediate lists if not present
     if not os.path.exists(args.tmp_list_dir):
@@ -224,18 +236,22 @@ def main():
         os.makedirs(actv_dir)
 
     activations.main(data_dir=args.data_dir, data_list=combined_list_hard_prev_model,\
-                    save_dir=actv_dir, num_steps=iterations, restore_from=args.restore_from)
+                    save_dir=actv_dir, num_steps=iterations, restore_from=args.restore_from,\
+                    seed=RANDOM_SEED, input_size=input_size)
 
     #######################################################################
     # Train the new model using classification and distillation loss
     #######################################################################
     # Append the activation files to a list [/path/to/image /path/to/masks /path/to/activations]
+    combined_list_old_new = get_file_path(args.tmp_list_dir, COMBINED_LIST_OLD_NEW)
+    combine_files(combined_list_old_new, args.data_list, args.old_data_list)
     combined_list_actv_with_img_and_mask = get_file_path(args.tmp_list_dir, COMBINED_ACTV_WITH_IMG_AND_MSK)
     combine_activations_with_image_and_mask(combined_list_actv_with_img_and_mask,\
-                                            args.data_list, combined_list_hard_prev_model)
+                                            combined_list_old_new, combined_list_hard_prev_model)
     print('Started training of the model using classification and distillation losses ...')
     distillation.main(data_dir=args.data_dir, actv_dir=actv_dir, data_list=combined_list_actv_with_img_and_mask,\
-                     num_steps=args.num_steps, restore_from=args.restore_from, snapshot_dir=args.snapshot_dir)
+                     num_steps=args.num_steps, restore_from=args.restore_from, snapshot_dir=args.snapshot_dir,\
+                      save_pred_every=args.save_pred_every, seed=RANDOM_SEED, input_size=input_size)
 
     #######################################################################
     # Get the hard-samples on newly trained model
@@ -244,14 +260,15 @@ def main():
     total_samples_list_new_model = get_file_path(args.tmp_list_dir, TOTAL_SAMPLES_FOR_NEW_MODEL)
     combine_files_with_collisions(total_samples_list_new_model, args.data_list, combined_list_hard_prev_model)
     iterations = get_file_len(total_samples_list_new_model)
-    model = args.snapshot_dir + '/' + 'model.ckpt-5000' #TODO: Fix this
+    latest_model_number = args.num_steps - args.num_steps%args.save_pred_every
+    model = get_file_path(args.snapshot_dir, 'model.ckpt-%d'%(latest_model_number))
     hard_samples.main(data_dir=args.data_dir, data_list=total_samples_list_new_model,\
                      save_list=args.new_data_list, num_steps=iterations, max_save=args.max_save,\
                      restore_from=model)
 
     # Clean the intermediata temporary directory
     print('Cleaning the temporary directory %s...'%(args.tmp_list_dir))
-    shutil.rmtree(args.tmp_list_dir)
+    #shutil.rmtree(args.tmp_list_dir)
 
 if __name__ == '__main__':
     main()

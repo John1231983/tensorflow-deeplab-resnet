@@ -19,12 +19,12 @@ from deeplab_resnet import DeepLabResNetModel, ImageReader, prepare_label
 
 n_classes = 21
 
-DATA_DIRECTORY = '/home/VOCdevkit'
-DATA_LIST_PATH = './dataset/train.txt'
-SAVE_LIST_PATH = './dataset/hard_samples.txt'
-NUM_STEPS = 10582 
-RESTORE_FROM = './deeplab_resnet.ckpt'
-MAX_SAVE = 200
+DATA_DIRECTORY = '/home/mac/Downloads/PASCAL_VOC_Aug/'
+DATA_LIST_PATH = './dataset/5k_data_valid_removal.txt'
+SAVE_LIST_PATH = './dataset/5k_data_valid_removal_hard.txt'
+NUM_STEPS = 5236
+RESTORE_FROM = 'snapshots_curriculum_5k_data/model.ckpt-5000'
+MAX_SAVE = 500
 
 RANDOM_SEED = 1234
 
@@ -57,6 +57,7 @@ def main(data_dir=DATA_DIRECTORY, data_list=DATA_LIST_PATH, save_list=SAVE_LIST_
                 data_dir,
                 data_list,
                 None, # No defined input size.
+                None, # No defined seed
                 False, # No random scale.
                 False, # No random mirror.
                 coord)

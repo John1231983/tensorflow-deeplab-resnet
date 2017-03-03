@@ -16,7 +16,7 @@ import time
 import tensorflow as tf
 import numpy as np
 
-from deeplab_resnet import DeepLabResNetModel, ImageReader_Distill, decode_labels, inv_preprocess, prepare_label
+from deeplab_resnet import DeepLabResNetModel, ImageReader_Distill, decode_labels, inv_preprocess, prepare_label, get_final_activation
 
 n_classes = 21
 
@@ -66,7 +66,7 @@ def load(saver, sess, ckpt_path):
     saver.restore(sess, ckpt_path)
     print("Restored model parameters from {}".format(ckpt_path))
 
-def main(data_dir=DATA_DIRECTORY, actv_dir=ACTV_DIR, data_list=DATA_LIST_PATH, num_steps=NUM_STEPS, restore_from=RESTORE_FROM, snapshot_dir=SNAPSHOT_DIR):
+def main(data_dir=DATA_DIRECTORY, actv_dir=ACTV_DIR, data_list=DATA_LIST_PATH, num_steps=NUM_STEPS, restore_from=RESTORE_FROM, snapshot_dir=SNAPSHOT_DIR, save_pred_every=SAVE_PRED_EVERY, seed=RANDOM_SEED, input_size=(321,321)):
     """Create the model and start the training."""
 
     h, w = map(int, INPUT_SIZE.split(','))
@@ -78,9 +78,6 @@ def main(data_dir=DATA_DIRECTORY, actv_dir=ACTV_DIR, data_list=DATA_LIST_PATH, n
     
         tf.set_random_seed(RANDOM_SEED)
     
-        # Create queue coordinator.
-        coord = tf.train.Coordinator()
-    
         # Load reader.
         with tf.name_scope("create_inputs"):
             reader = ImageReader_Distill(
@@ -88,9 +85,10 @@ def main(data_dir=DATA_DIRECTORY, actv_dir=ACTV_DIR, data_list=DATA_LIST_PATH, n
                 actv_dir,
                 data_list,
                 input_size,
+                seed,
                 True, # Random scale
-                True, # Random mirror
-                coord)
+                True) # Random mirror
+                #coord)
             image_batch, label_batch, activation_batch = reader.dequeue(BATCH_SIZE)
             image_batch075 = tf.image.resize_images(image_batch, [int(h * 0.75), int(w * 0.75)])
             image_batch05 = tf.image.resize_images(image_batch, [int(h * 0.5), int(w * 0.5)])
@@ -138,13 +136,14 @@ def main(data_dir=DATA_DIRECTORY, actv_dir=ACTV_DIR, data_list=DATA_LIST_PATH, n
         raw_prediction075 = tf.reshape(raw_output075, [-1, n_classes])
         raw_prediction05 = tf.reshape(raw_output05, [-1, n_classes])
 
-        activation_proc = tf.image.resize_images(activation_batch, tf.shape(raw_output)[1:3,])
-        activation_proc075 = tf.image.resize_images(activation_batch, tf.shape(raw_output075)[1:3,]) 
-        activation_proc05 = tf.image.resize_images(activation_batch, tf.shape(raw_output05)[1:3,])
-
-        raw_activation = tf.reshape(activation_proc, [-1, n_classes])
-        raw_activation075 = tf.reshape(activation_proc075, [-1, n_classes])
-        raw_activation05 = tf.reshape(activation_proc05, [-1, n_classes])
+        # Downscale the activations as per the current predictions
+        activation_rmv_channel = tf.unpack(activation_batch, axis=3) # Split the activations across channel dimension
+        raw_activation_rmv_channel = tf.reshape(activation_rmv_channel[0], [-1,]) # Get the activations across first channel
+        indices = tf.squeeze(tf.where(tf.not_equal(raw_activation_rmv_channel, 0)), 1) # Get the indices where activations are non-zero
+        raw_activation = tf.reshape(activation_batch, [-1, n_classes])
+        reduced_activation = tf.gather(raw_activation, indices) # Get all the non-zero activations -> This will restore the original activations
+        final_activation = tf.py_func(get_final_activation, [reduced_activation, raw_prediction], tf.float32)
+        #final_activation = tf.reshape(reduced_activation, tf.shape(raw_prediction))
 
     
         label_proc = prepare_label(label_batch, tf.pack(raw_output.get_shape()[1:3]), one_hot=False) # [batch_size, h, w]
@@ -168,24 +167,15 @@ def main(data_dir=DATA_DIRECTORY, actv_dir=ACTV_DIR, data_list=DATA_LIST_PATH, n
         prediction075 = tf.gather(raw_prediction075, indices075)
         prediction05 = tf.gather(raw_prediction05, indices05)
 
-        activation = tf.gather(raw_activation, indices)
-        activation075 = tf.gather(raw_activation075, indices075)
-        activation05 = tf.gather(raw_activation05, indices05)
-
         # Define a placeholder for temperature variable
         Temp = tf.placeholder(shape=None, dtype=tf.float32)
 
-        # Calculate softmax probs at higher temperature
-        pred_probs = tf.nn.softmax(prediction/ Temp)
-        pred_probs100 = tf.nn.softmax(prediction100/ Temp)
-        pred_probs075 = tf.nn.softmax(prediction075/ Temp)
-        pred_probs05 = tf.nn.softmax(prediction05/ Temp)
+        # Calculate the predictions at higher temperature
+        soft_raw_prediction = raw_prediction/ Temp
+        soft_pred_probs = tf.nn.softmax(soft_raw_prediction)
 
         # Calculate distillation loss
-        loss_distill = tf.reduce_mean(-tf.reduce_sum(activation * tf.log(pred_probs), axis=1))
-        loss_distill100 = tf.reduce_mean(-tf.reduce_sum(activation * tf.log(pred_probs100), axis=1))
-        loss_distill075 = tf.reduce_mean(-tf.reduce_sum(activation075 * tf.log(pred_probs075), axis=1))
-        loss_distill05 = tf.reduce_mean(-tf.reduce_sum(activation05 * tf.log(pred_probs05), axis=1))
+        loss_distill = tf.reduce_mean(-tf.reduce_sum(final_activation * tf.log(soft_pred_probs), axis=1))
 
         # Pixel-wise softmax loss.
         loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=prediction, labels=gt)
@@ -194,7 +184,7 @@ def main(data_dir=DATA_DIRECTORY, actv_dir=ACTV_DIR, data_list=DATA_LIST_PATH, n
         loss05 = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=prediction05, labels=gt05)
         l2_losses = [WEIGHT_DECAY * tf.nn.l2_loss(v) for v in tf.trainable_variables() if 'weights' in v.name]
         reduced_loss = tf.reduce_mean(loss) + tf.reduce_mean(loss100) + tf.reduce_mean(loss075) + tf.reduce_mean(loss05) +\
-                loss_distill + loss_distill100 + loss_distill075 + loss_distill05 + tf.add_n(l2_losses)
+                loss_distill + tf.add_n(l2_losses)
    
         # Add loss to summary
         tf.summary.scalar("loss", reduced_loss)
@@ -260,7 +250,6 @@ def main(data_dir=DATA_DIRECTORY, actv_dir=ACTV_DIR, data_list=DATA_LIST_PATH, n
 
         # Initialize the model parameters
         tf.global_variables_initializer().run()
-
     
         # Saver for storing checkpoints of the model.
         saver = tf.train.Saver(var_list=restore_var, max_to_keep=10)
@@ -270,6 +259,9 @@ def main(data_dir=DATA_DIRECTORY, actv_dir=ACTV_DIR, data_list=DATA_LIST_PATH, n
             loader = tf.train.Saver(var_list=restore_var)
             load(loader, sess, restore_from)
     
+        # Create queue coordinator.
+        coord = tf.train.Coordinator()
+
         # Start queue threads.
         threads = tf.train.start_queue_runners(coord=coord, sess=sess)
 
@@ -291,13 +283,14 @@ def main(data_dir=DATA_DIRECTORY, actv_dir=ACTV_DIR, data_list=DATA_LIST_PATH, n
             loss_value /= GRAD_UPDATE_EVERY
 
             # Apply gradients.
-            if step % SAVE_PRED_EVERY == 0:
+            if step % save_pred_every == 0:
                 images, labels, summary, _ = sess.run([image_batch, label_batch,
                                                        merged_summary, train_op], feed_dict=feed_dict)
                 summary_writer.add_summary(summary, step)
                 save(saver, sess, snapshot_dir, step)
             else:
-                _, summary = sess.run([train_op, merged_summary], feed_dict=feed_dict)
+                #_, summary = sess.run([train_op, merged_summary], feed_dict=feed_dict)
+                sess.run(train_op, feed_dict=feed_dict)
                 summary_writer.add_summary(summary, step)
 
             duration = time.time() - start_time

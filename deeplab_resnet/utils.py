@@ -75,3 +75,22 @@ def inv_preprocess(imgs, num_images):
   for i in range(num_images):
     outputs[i] = (imgs[i] + IMG_MEAN)[:, :, ::-1].astype(np.uint8)
   return outputs
+
+def get_final_activation(reduced_activation, prediction):
+    if reduced_activation.size == 0:
+        new_activation = np.zeros(prediction.shape, dtype=np.float32)
+    else:
+        new_activation = reduced_activation
+
+    return new_activation
+
+def load_npz(npz_file):
+    actv_arr = np.load(npz_file)
+    activation = actv_arr['actv'].astype(np.float64)
+    return activation
+
+def get_actv_shape(activation):
+    shape = np.asarray(activation.shape)
+    return shape
+
+
