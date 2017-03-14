@@ -128,6 +128,7 @@ def main():
             args.data_dir,
             args.data_list,
             input_size,
+            RANDOM_SEED,
             args.random_scale,
             args.random_mirror,
             coord)
@@ -284,7 +285,7 @@ def main():
     threads = tf.train.start_queue_runners(coord=coord, sess=sess)
 
     # Iterate over training steps.
-    for step in range(4001, args.num_steps):
+    for step in range(args.num_steps):
         start_time = time.time()
         feed_dict = { step_ph : step }
         loss_value = 0
@@ -307,8 +308,9 @@ def main():
             summary_writer.add_summary(summary, step)
             save(saver, sess, args.snapshot_dir, step)
         else:
-            _, summary = sess.run([train_op, merged_summary], feed_dict=feed_dict)
-            summary_writer.add_summary(summary, step)
+            #_, summary = sess.run([train_op, merged_summary], feed_dict=feed_dict)
+            #summary_writer.add_summary(summary, step)
+            sess.run(train_op, feed_dict=feed_dict)
 
         duration = time.time() - start_time
         print('step {:d} \t loss = {:.3f}, ({:.3f} sec/step)'.format(step, loss_value, duration))

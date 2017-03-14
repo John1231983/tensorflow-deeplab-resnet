@@ -65,6 +65,7 @@ def main():
             args.data_dir,
             args.data_list,
             None, # No defined input size.
+            None, # ro random seed
             False, # No random scale.
             False, # No random mirror.
             coord)

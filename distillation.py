@@ -291,7 +291,7 @@ def main(data_dir=DATA_DIRECTORY, actv_dir=ACTV_DIR, data_list=DATA_LIST_PATH, n
             else:
                 #_, summary = sess.run([train_op, merged_summary], feed_dict=feed_dict)
                 sess.run(train_op, feed_dict=feed_dict)
-                summary_writer.add_summary(summary, step)
+                # summary_writer.add_summary(summary, step)
 
             duration = time.time() - start_time
             print('step {:d} \t loss = {:.3f}, ({:.3f} sec/step)'.format(step, loss_value, duration))

@@ -85,10 +85,10 @@ def main(data_dir=DATA_DIRECTORY, data_list=DATA_LIST_PATH, save_list=SAVE_LIST_
         raw_output05 = tf.image.resize_images(net05.layers['fc1_voc12'], tf.shape(raw_output100)[1:3,])
     
         raw_output = tf.reduce_max(tf.stack([raw_output100, raw_output075, raw_output05]), axis=0)
-        raw_output_up = tf.image.resize_bilinear(raw_output, tf.shape(image_batch)[1:3,])
+        #raw_output_up = tf.image.resize_bilinear(raw_output, tf.shape(image_batch)[1:3,])
     
         # Calculate hard-samples based on entropy of the predictions
-        logits = tf.reshape(raw_output_up, [-1, n_classes])
+        logits = tf.reshape(raw_output, [-1, n_classes])
         pred_probs = tf.nn.softmax(logits)
         pred_entropy = tf.reduce_mean(-tf.reduce_sum(pred_probs *
                                                  tf.log(pred_probs), axis=1))
