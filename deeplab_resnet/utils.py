@@ -93,4 +93,34 @@ def get_actv_shape(activation):
     shape = np.asarray(activation.shape)
     return shape
 
+def get_mapIDs(catg_file):
+    f = open(catg_file, 'r')
+    catgs = []
+    for line in f:
+        catgs.append(line.strip("\n"))
+    f.close()
+        
+    mapIDs = np.zeros((len(catgs)))
+    for i in range(len(catgs)):
+        mapIDs[i] = int(catgs[i])
 
+    return mapIDs
+
+def decode_npz(npz_file, catg_file):
+    actv_arr = np.load(npz_file)
+    activation = actv_arr['actv'].astype(np.float64)
+    l, w = activation.shape[:2]
+    final_label = np.zeros((l, w, n_classes)).astype(np.float64)
+    max_indices = activation.argmax(axis=2)
+    mapIDs = get_mapIDs(catg_file)
+    for i in range(l):
+        for j in range(w):
+            max_class = int(mapIDs[max_indices[i, j]])
+            final_label[i, j, max_class] = activation[i, j, max_indices[i, j]]
+            final_label[i, j, 0] = 1 - activation[i, j, max_indices[i, j]]
+
+    return final_label
+
+def get_label_shape(label):
+    shape = np.asarray(label.shape)
+    return shape

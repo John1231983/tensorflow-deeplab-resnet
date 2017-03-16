@@ -3,6 +3,8 @@ import os
 import numpy as np
 import tensorflow as tf
 
+from utils import decode_npz, get_label_shape
+
 IGNORE_LABEL = 255
 IMG_MEAN = np.array((104.00698793,116.66876762,122.67891434), dtype=np.float32)
 
@@ -52,23 +54,23 @@ def random_crop_and_pad_image_and_labels(image, label, crop_h, crop_w, seed, ign
       ignore_label: Label to ignore during the training.
     """
 
-    label = tf.cast(label, dtype=tf.float32)
-    label = label - ignore_label # Needs to be subtracted and later added due to 0 padding.
+    #label = tf.cast(label, dtype=tf.float32)
+    #label = label - ignore_label # Needs to be subtracted and later added due to 0 padding.
     combined = tf.concat(2, [image, label]) 
     image_shape = tf.shape(image)
     combined_pad = tf.image.pad_to_bounding_box(combined, 0, 0, tf.maximum(crop_h, image_shape[0]), tf.maximum(crop_w, image_shape[1]))
     
     last_image_dim = tf.shape(image)[-1]
     last_label_dim = tf.shape(label)[-1]
-    combined_crop = tf.random_crop(combined_pad, [crop_h,crop_w,4], seed=seed)
+    combined_crop = tf.random_crop(combined_pad, [crop_h,crop_w,24], seed=seed)
     img_crop = combined_crop[:, :, :last_image_dim]
     label_crop = combined_crop[:, :, last_image_dim:]
-    label_crop = label_crop + ignore_label
-    label_crop = tf.cast(label_crop, dtype=tf.uint8)
+    #label_crop = label_crop + ignore_label
+    #label_crop = tf.cast(label_crop, dtype=tf.uint8)
     
     # Set static shape so that tensorflow knows shape at compile time. 
     img_crop.set_shape((crop_h, crop_w, 3))
-    label_crop.set_shape((crop_h,crop_w, 1))
+    label_crop.set_shape((crop_h,crop_w, 21))
     return img_crop, label_crop  
 
 def read_labeled_image_list(data_dir, data_list):
@@ -84,14 +86,16 @@ def read_labeled_image_list(data_dir, data_list):
     f = open(data_list, 'r')
     images = []
     masks = []
+    catgs = []
     for line in f:
         try:
-            image, mask = line.strip("\n").split(' ')
+            image, mask, catg = line.strip("\n").split(' ')
         except ValueError: # Adhoc for test.
-            image = mask = line.strip("\n")
+            image = mask = catg = line.strip("\n")
         images.append(data_dir + image)
         masks.append(data_dir + mask)
-    return images, masks
+        catgs.append(data_dir + catg)
+    return images, masks, catgs
 
 def read_images_from_disk(input_queue, input_size, random_scale, random_mirror, seed): # optional pre-processing arguments
     """Read one image and its corresponding mask with optional pre-processing.
@@ -110,7 +114,7 @@ def read_images_from_disk(input_queue, input_size, random_scale, random_mirror, 
     """
 
     img_contents = tf.read_file(input_queue[0])
-    label_contents = tf.read_file(input_queue[1])
+    #label_contents = tf.read_file(input_queue[1])
     
     img = tf.image.decode_jpeg(img_contents, channels=3)
     img_r, img_g, img_b = tf.split(split_dim=2, num_split=3, value=img)
@@ -118,7 +122,10 @@ def read_images_from_disk(input_queue, input_size, random_scale, random_mirror, 
     # Extract mean.
     img -= IMG_MEAN
 
-    label = tf.image.decode_png(label_contents, channels=1)
+    label = tf.py_func(decode_npz, [input_queue[1], input_queue[2]], [tf.double])
+    shape = tf.py_func(get_label_shape, label, [tf.int64])
+    shape = tf.to_int32(tf.reshape(shape, [3]))
+    label = tf.to_float(tf.reshape(label, shape))
 
     if input_size is not None:
         h, w = input_size
@@ -159,10 +166,11 @@ class ImageReader(object):
         self.seed = seed
         self.coord = coord
         
-        self.image_list, self.label_list = read_labeled_image_list(self.data_dir, self.data_list)
+        self.image_list, self.label_list, self.catg_list = read_labeled_image_list(self.data_dir, self.data_list)
         self.images = tf.convert_to_tensor(self.image_list, dtype=tf.string)
         self.labels = tf.convert_to_tensor(self.label_list, dtype=tf.string)
-        self.queue = tf.train.slice_input_producer([self.images, self.labels],
+        self.catgs = tf.convert_to_tensor(self.catg_list, dtype=tf.string)
+        self.queue = tf.train.slice_input_producer([self.images, self.labels, self.catgs],
                                                    shuffle=input_size is not None) # not shuffling if it is val
         self.image, self.label = read_images_from_disk(self.queue, self.input_size, random_scale, random_mirror, self.seed) 
 

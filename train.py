@@ -125,6 +125,7 @@ def main():
             args.data_dir,
             args.data_list,
             input_size,
+            RANDOM_SEED,
             args.random_scale,
             args.random_mirror,
             coord)
@@ -155,15 +156,19 @@ def main():
     
     # Predictions: ignoring all predictions with labels greater or equal than n_classes
     raw_prediction = tf.reshape(raw_output, [-1, n_classes])
-    label_proc = prepare_label(label_batch, tf.pack(raw_output.get_shape()[1:3]), one_hot=False) # [batch_size, h, w]
-    raw_gt = tf.reshape(label_proc, [-1,])
-    indices = tf.squeeze(tf.where(tf.less_equal(raw_gt, n_classes - 1)), 1)
-    gt = tf.cast(tf.gather(raw_gt, indices), tf.int32)
-    prediction = tf.gather(raw_prediction, indices)
+    #label_proc = prepare_label(label_batch, tf.pack(raw_output.get_shape()[1:3]), one_hot=False) # [batch_size, h, w]
+    label_proc = tf.image.resize_nearest_neighbor(label_batch, tf.pack(raw_output.get_shape()[1:3]))
+    raw_gt = tf.reshape(label_proc, [-1, n_classes])
+    #indices = tf.squeeze(tf.where(tf.less_equal(raw_gt, n_classes - 1)), 1)
+    #gt = tf.cast(tf.gather(raw_gt, indices), tf.int32)
+    #prediction = tf.gather(raw_prediction, indices)
                                                   
                                                   
     # Pixel-wise softmax loss.
-    loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=prediction, labels=gt)
+    #loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=prediction, labels=gt)
+    softmax_probs = tf.nn.softmax(raw_prediction)
+    loss = -tf.reduce_sum(raw_gt * tf.log(softmax_probs), axis=1)
+    #loss = tf.nn.softmax_cross_entropy_with_logits(logits=raw_prediction, labels=raw_gt)
     l2_losses = [args.weight_decay * tf.nn.l2_loss(v) for v in tf.trainable_variables() if 'weights' in v.name]
     reduced_loss = tf.reduce_mean(loss) + tf.add_n(l2_losses)
     
@@ -174,11 +179,11 @@ def main():
     
     # Image summary.
     images_summary = tf.py_func(inv_preprocess, [image_batch, args.save_num_images], tf.uint8)
-    labels_summary = tf.py_func(decode_labels, [label_batch, args.save_num_images], tf.uint8)
+    #labels_summary = tf.py_func(decode_labels, [label_batch, args.save_num_images], tf.uint8)
     preds_summary = tf.py_func(decode_labels, [pred, args.save_num_images], tf.uint8)
     
     total_summary = tf.summary.image('images', 
-                                     tf.concat(2, [images_summary, labels_summary, preds_summary]), 
+                                     tf.concat(2, [images_summary, preds_summary]), 
                                      max_outputs=args.save_num_images) # Concatenate row-wise.
     summary_writer = tf.summary.FileWriter(args.snapshot_dir,
                                            graph=tf.get_default_graph())
@@ -233,7 +238,7 @@ def main():
             summary_writer.add_summary(summary, step)
             save(saver, sess, args.snapshot_dir, step)
         else:
-            loss_value, _ = sess.run([reduced_loss, train_op], feed_dict=feed_dict)
+            loss_value, label_b, label_p, _ = sess.run([reduced_loss, label_batch, raw_gt, train_op], feed_dict=feed_dict)
         duration = time.time() - start_time
         print('step {:d} \t loss = {:.3f}, ({:.3f} sec/step)'.format(step, loss_value, duration))
     coord.request_stop()

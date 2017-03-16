@@ -178,34 +178,42 @@ def main():
     raw_prediction100 = tf.reshape(raw_output100, [-1, n_classes])
     raw_prediction075 = tf.reshape(raw_output075, [-1, n_classes])
     raw_prediction05 = tf.reshape(raw_output05, [-1, n_classes])
+   
     
-    label_proc = prepare_label(label_batch, tf.pack(raw_output.get_shape()[1:3]), one_hot=False) # [batch_size, h, w]
-    label_proc075 = prepare_label(label_batch, tf.pack(raw_output075.get_shape()[1:3]), one_hot=False)
-    label_proc05 = prepare_label(label_batch, tf.pack(raw_output05.get_shape()[1:3]), one_hot=False)
+    #label_proc = prepare_label(label_batch, tf.pack(raw_output.get_shape()[1:3]), one_hot=False) # [batch_size, h, w]
+    #label_proc075 = prepare_label(label_batch, tf.pack(raw_output075.get_shape()[1:3]), one_hot=False)
+    #label_proc05 = prepare_label(label_batch, tf.pack(raw_output05.get_shape()[1:3]), one_hot=False)
+
+    label_proc = tf.image.resize_nearest_neighbor(label_batch, tf.pack(raw_output.get_shape()[1:3]))
+    label_proc075 = tf.image.resize_nearest_neighbor(label_batch, tf.pack(raw_output075.get_shape()[1:3]))
+    label_proc05 = tf.image.resize_nearest_neighbor(label_batch, tf.pack(raw_output05.get_shape()[1:3]))
+
+    chk = tf.reshape(label_batch, [-1, n_classes])
     
-    raw_gt = tf.reshape(label_proc, [-1,])
-    raw_gt075 = tf.reshape(label_proc075, [-1,])
-    raw_gt05 = tf.reshape(label_proc05, [-1,])
+    raw_gt = tf.reshape(label_proc, [-1, n_classes])
+    raw_gt075 = tf.reshape(label_proc075, [-1, n_classes])
+    raw_gt05 = tf.reshape(label_proc05, [-1, n_classes])
     
-    indices = tf.squeeze(tf.where(tf.less_equal(raw_gt, n_classes - 1)), 1)
-    indices075 = tf.squeeze(tf.where(tf.less_equal(raw_gt075, n_classes - 1)), 1)
-    indices05 = tf.squeeze(tf.where(tf.less_equal(raw_gt05, n_classes - 1)), 1)
+    #indices = tf.squeeze(tf.where(tf.less_equal(raw_gt, n_classes - 1)), 1)
+    #indices075 = tf.squeeze(tf.where(tf.less_equal(raw_gt075, n_classes - 1)), 1)
+    #indices05 = tf.squeeze(tf.where(tf.less_equal(raw_gt05, n_classes - 1)), 1)
     
-    gt = tf.cast(tf.gather(raw_gt, indices), tf.int32)
-    gt075 = tf.cast(tf.gather(raw_gt075, indices075), tf.int32)
-    gt05 = tf.cast(tf.gather(raw_gt05, indices05), tf.int32)
+    #gt = tf.cast(tf.gather(raw_gt, indices), tf.int32)
+    #gt075 = tf.cast(tf.gather(raw_gt075, indices075), tf.int32)
+    #gt05 = tf.cast(tf.gather(raw_gt05, indices05), tf.int32)
     
-    prediction = tf.gather(raw_prediction, indices)
-    prediction100 = tf.gather(raw_prediction100, indices)
-    prediction075 = tf.gather(raw_prediction075, indices075)
-    prediction05 = tf.gather(raw_prediction05, indices05)
+    #prediction = tf.gather(raw_prediction, indices)
+    #prediction100 = tf.gather(raw_prediction100, indices)
+    #prediction075 = tf.gather(raw_prediction075, indices075)
+    #prediction05 = tf.gather(raw_prediction05, indices05)
+    
                                                   
                                                   
     # Pixel-wise softmax loss.
-    loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=prediction, labels=gt)
-    loss100 = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=prediction100, labels=gt)
-    loss075 = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=prediction075, labels=gt075)
-    loss05 = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=prediction05, labels=gt05)
+    loss = tf.nn.softmax_cross_entropy_with_logits(logits=raw_prediction, labels=raw_gt)
+    loss100 = tf.nn.softmax_cross_entropy_with_logits(logits=raw_prediction100, labels=raw_gt)
+    loss075 = tf.nn.softmax_cross_entropy_with_logits(logits=raw_prediction075, labels=raw_gt075)
+    loss05 = tf.nn.softmax_cross_entropy_with_logits(logits=raw_prediction05, labels=raw_gt05)
     l2_losses = [args.weight_decay * tf.nn.l2_loss(v) for v in tf.trainable_variables() if 'weights' in v.name]
     reduced_loss = tf.reduce_mean(loss) + tf.reduce_mean(loss100) + tf.reduce_mean(loss075) + tf.reduce_mean(loss05) + tf.add_n(l2_losses)
    
@@ -219,11 +227,11 @@ def main():
     
     # Image summary.
     images_summary = tf.py_func(inv_preprocess, [image_batch, args.save_num_images], tf.uint8)
-    labels_summary = tf.py_func(decode_labels, [label_batch, args.save_num_images], tf.uint8)
+    #labels_summary = tf.py_func(decode_labels, [label_batch, args.save_num_images], tf.uint8)
     preds_summary = tf.py_func(decode_labels, [pred, args.save_num_images], tf.uint8)
     
     total_summary = tf.summary.image('images', 
-                                    tf.concat(2, [images_summary, labels_summary, preds_summary]), 
+                                    tf.concat(2, [images_summary, preds_summary]), 
                                     max_outputs=args.save_num_images) # Concatenate row-wise.
 
     merged_summary = tf.summary.merge_all()
@@ -295,7 +303,7 @@ def main():
        
         # Accumulate gradients.
         for i in range(args.grad_update_every):
-            _, l_val = sess.run([accum_grads_op, reduced_loss], feed_dict=feed_dict)
+            _, l_val, gt = sess.run([accum_grads_op, reduced_loss, chk], feed_dict=feed_dict)
             loss_value += l_val
 
         # Normalise the loss.
