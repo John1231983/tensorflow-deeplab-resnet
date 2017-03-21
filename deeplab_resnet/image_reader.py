@@ -3,7 +3,7 @@ import os
 import numpy as np
 import tensorflow as tf
 
-from utils import decode_npz, get_label_shape
+from utils import decode_npz, get_label_shape, get_mapIDs
 
 IGNORE_LABEL = 255
 IMG_MEAN = np.array((104.00698793,116.66876762,122.67891434), dtype=np.float32)
@@ -123,9 +123,12 @@ def read_images_from_disk(input_queue, input_size, random_scale, random_mirror, 
     img -= IMG_MEAN
 
     label = tf.py_func(decode_npz, [input_queue[1], input_queue[2]], [tf.double])
+    catg = tf.py_func(get_mapIDs, [input_queue[2]], [tf.int64])
     shape = tf.py_func(get_label_shape, label, [tf.int64])
     shape = tf.to_int32(tf.reshape(shape, [3]))
     label = tf.to_float(tf.reshape(label, shape))
+    catg = tf.to_float(tf.reshape(catg, [1]))
+    catg.set_shape((1))
 
     if input_size is not None:
         h, w = input_size
@@ -141,7 +144,7 @@ def read_images_from_disk(input_queue, input_size, random_scale, random_mirror, 
         # Randomly crops the images and labels.
         img, label = random_crop_and_pad_image_and_labels(img, label, h, w, seed, IGNORE_LABEL)
 
-    return img, label
+    return img, label, catg
 
 class ImageReader(object):
     '''Generic ImageReader which reads images and corresponding segmentation
@@ -172,7 +175,7 @@ class ImageReader(object):
         self.catgs = tf.convert_to_tensor(self.catg_list, dtype=tf.string)
         self.queue = tf.train.slice_input_producer([self.images, self.labels, self.catgs],
                                                    shuffle=input_size is not None) # not shuffling if it is val
-        self.image, self.label = read_images_from_disk(self.queue, self.input_size, random_scale, random_mirror, self.seed) 
+        self.image, self.label, self.catg = read_images_from_disk(self.queue, self.input_size, random_scale, random_mirror, self.seed) 
 
     def dequeue(self, num_elements):
         '''Pack images and labels into a batch.
@@ -182,6 +185,6 @@ class ImageReader(object):
           
         Returns:
           Two tensors of size (batch_size, h, w, {3, 1}) for images and masks.'''
-        image_batch, label_batch = tf.train.batch([self.image, self.label],
+        image_batch, label_batch, catg_batch = tf.train.batch([self.image, self.label, self.catg],
                                                   num_elements)
-        return image_batch, label_batch
+        return image_batch, label_batch, catg_batch

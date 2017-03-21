@@ -1,4 +1,4 @@
-"""Training script for the DeepLab-ResNet network on the PASCAL VOC dataset
+"""Training script with multi-scale inputs for the DeepLab-ResNet network on the PASCAL VOC dataset
    for semantic image segmentation.
 
 This script trains the model using augmented PASCAL VOC,
@@ -20,17 +20,18 @@ from deeplab_resnet import DeepLabResNetModel, ImageReader, decode_labels, inv_p
 
 n_classes = 21
 
-BATCH_SIZE = 10
+BATCH_SIZE = 1
 DATA_DIRECTORY = '/home/VOCdevkit'
 DATA_LIST_PATH = './dataset/train.txt'
+GRAD_UPDATE_EVERY = 10
 INPUT_SIZE = '321,321'
-LEARNING_RATE = 0.001 #2.5e-4
+LEARNING_RATE = 2.5e-4
 MOMENTUM = 0.9
 NUM_STEPS = 20001
 POWER = 0.9
 RANDOM_SEED = 1234
 RESTORE_FROM = './deeplab_resnet.ckpt'
-SAVE_NUM_IMAGES = 2
+SAVE_NUM_IMAGES = 1
 SAVE_PRED_EVERY = 1000
 SNAPSHOT_DIR = './snapshots/'
 WEIGHT_DECAY = 0.0005
@@ -49,10 +50,12 @@ def get_arguments():
                         help="Path to the directory containing the PASCAL VOC dataset.")
     parser.add_argument("--data-list", type=str, default=DATA_LIST_PATH,
                         help="Path to the file listing the images in the dataset.")
+    parser.add_argument("--grad-update-every", type=int, default=GRAD_UPDATE_EVERY,
+                        help="Number of steps after which gradient update is applied.")
     parser.add_argument("--input-size", type=str, default=INPUT_SIZE,
                         help="Comma-separated string with height and width of images.")
     parser.add_argument("--is-training", action="store_true",
-                        help="Whether to updates the running means and variances during the training.")
+                        help="Whether to update the running means and variances during the training.")
     parser.add_argument("--learning-rate", type=float, default=LEARNING_RATE,
                         help="Base learning rate for training with polynomial decay.")
     parser.add_argument("--momentum", type=float, default=MOMENTUM,
@@ -130,9 +133,16 @@ def main():
             args.random_mirror,
             coord)
         image_batch, label_batch, catg_batch = reader.dequeue(args.batch_size)
+        image_batch075 = tf.image.resize_images(image_batch, [int(h * 0.75), int(w * 0.75)])
+        image_batch05 = tf.image.resize_images(image_batch, [int(h * 0.5), int(w * 0.5)])
     
     # Create network.
-    net = DeepLabResNetModel({'data': image_batch}, is_training=args.is_training)
+    with tf.variable_scope('', reuse=False):
+        net = DeepLabResNetModel({'data': image_batch}, is_training=args.is_training)
+    with tf.variable_scope('', reuse=True):
+        net075 = DeepLabResNetModel({'data': image_batch075}, is_training=args.is_training)
+    with tf.variable_scope('', reuse=True):
+        net05 = DeepLabResNetModel({'data': image_batch05}, is_training=args.is_training)
     # For a small batch size, it is better to keep 
     # the statistics of the BN layers (running means and variances)
     # frozen, and to not update the values provided by the pre-trained model. 
@@ -141,7 +151,12 @@ def main():
     # if they are presented in var_list of the optimiser definition.
 
     # Predictions.
-    raw_output = net.layers['fc1_voc12']
+    raw_output100 = net.layers['fc1_voc12']
+    raw_output075 = net075.layers['fc1_voc12']
+    raw_output05 = net05.layers['fc1_voc12']
+    raw_output = tf.reduce_max(tf.stack([raw_output100,
+                                         tf.image.resize_images(raw_output075, tf.shape(raw_output100)[1:3,]),
+                                         tf.image.resize_images(raw_output05, tf.shape(raw_output100)[1:3,])]), axis=0)
     # Which variables to load. Running means and variances are not trainable,
     # thus all_variables() should be restored.
     restore_var = tf.global_variables()
@@ -156,27 +171,36 @@ def main():
     # Add histogram of all variables
     for v in conv_trainable + fc_w_trainable + fc_b_trainable:
         tf.summary.histogram(v.name.replace(":", "_"), v)
-
     
     
     # Predictions: ignoring all predictions with labels greater or equal than n_classes
     raw_prediction = tf.reshape(raw_output, [-1, n_classes])
-    #label_proc = prepare_label(label_batch, tf.pack(raw_output.get_shape()[1:3]), one_hot=False) # [batch_size, h, w]
+    raw_prediction100 = tf.reshape(raw_output100, [-1, n_classes])
+    raw_prediction075 = tf.reshape(raw_output075, [-1, n_classes])
+    raw_prediction05 = tf.reshape(raw_output05, [-1, n_classes])
+   
     label_proc = tf.image.resize_nearest_neighbor(label_batch, tf.pack(raw_output.get_shape()[1:3]))
-    raw_gt = tf.reshape(label_proc, [-1, n_classes])
-    #indices = tf.squeeze(tf.where(tf.less_equal(raw_gt, n_classes - 1)), 1)
-    #gt = tf.cast(tf.gather(raw_gt, indices), tf.int32)
-    #prediction = tf.gather(raw_prediction, indices)
-                                                  
-                                                  
-    # Pixel-wise softmax loss.
-    #loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=prediction, labels=gt)
-    softmax_probs = tf.nn.softmax(raw_prediction)
-    loss = -tf.reduce_sum(raw_gt * tf.log(softmax_probs), axis=1)
-    #loss = tf.nn.softmax_cross_entropy_with_logits(logits=raw_prediction, labels=raw_gt)
-    l2_losses = [args.weight_decay * tf.nn.l2_loss(v) for v in tf.trainable_variables() if 'weights' in v.name]
-    reduced_loss = tf.reduce_mean(loss) + tf.add_n(l2_losses)
+    label_proc075 = tf.image.resize_nearest_neighbor(label_batch, tf.pack(raw_output075.get_shape()[1:3]))
+    label_proc05 = tf.image.resize_nearest_neighbor(label_batch, tf.pack(raw_output05.get_shape()[1:3]))
 
+    raw_gt = tf.reshape(label_proc, [-1, n_classes])
+    raw_gt075 = tf.reshape(label_proc075, [-1, n_classes])
+    raw_gt05 = tf.reshape(label_proc05, [-1, n_classes])
+    
+    softmax_probs       = tf.nn.softmax(raw_prediction)
+    softmax_probs100    = tf.nn.softmax(raw_prediction100)
+    softmax_probs075    = tf.nn.softmax(raw_prediction075)
+    softmax_probs05     = tf.nn.softmax(raw_prediction05)
+
+    # Pixel-wise softmax loss.
+    loss = -tf.reduce_sum(raw_gt * tf.log(softmax_probs), axis=1)
+    loss100 = -tf.reduce_sum(raw_gt * tf.log(softmax_probs100), axis=1)
+    loss075 = -tf.reduce_sum(raw_gt075 * tf.log(softmax_probs075), axis=1)
+    loss05 = -tf.reduce_sum(raw_gt05 * tf.log(softmax_probs05), axis=1)
+
+    l2_losses = [args.weight_decay * tf.nn.l2_loss(v) for v in tf.trainable_variables() if 'weights' in v.name]
+    reduced_loss = tf.reduce_mean(loss) + tf.reduce_mean(loss100) + tf.reduce_mean(loss075) + tf.reduce_mean(loss05) + tf.add_n(l2_losses)
+   
     # Add loss to summary
     tf.summary.scalar("loss", reduced_loss)
 
@@ -187,12 +211,12 @@ def main():
     
     # Image summary.
     images_summary = tf.py_func(inv_preprocess, [image_batch, args.save_num_images], tf.uint8)
-    #labels_summary = tf.py_func(decode_labels, [label_batch, args.save_num_images], tf.uint8)
     preds_summary = tf.py_func(decode_labels, [pred, args.save_num_images], tf.uint8)
     
     total_summary = tf.summary.image('images', 
-                                     tf.concat(2, [images_summary, preds_summary]), 
-                                     max_outputs=args.save_num_images) # Concatenate row-wise.
+                                    tf.concat(2, [images_summary, preds_summary]), 
+                                    max_outputs=args.save_num_images) # Concatenate row-wise.
+
     merged_summary = tf.summary.merge_all()
     summary_writer = tf.summary.FileWriter(args.snapshot_dir,
                                            graph=tf.get_default_graph())
@@ -206,11 +230,25 @@ def main():
     opt_fc_w = tf.train.MomentumOptimizer(learning_rate * 10.0, args.momentum)
     opt_fc_b = tf.train.MomentumOptimizer(learning_rate * 10.0, args.momentum) # reducing the learning rate
 
-    grads = tf.gradients(reduced_loss, conv_trainable + fc_w_trainable + fc_b_trainable)
-    grads_conv = grads[:len(conv_trainable)]
-    grads_fc_w = grads[len(conv_trainable) : (len(conv_trainable) + len(fc_w_trainable))]
-    grads_fc_b = grads[(len(conv_trainable) + len(fc_w_trainable)):]
+    # Define a variable to accumulate gradients.
+    accum_grads = [tf.Variable(tf.zeros_like(v.initialized_value()),
+                               trainable=False) for v in conv_trainable + fc_w_trainable + fc_b_trainable]
 
+    # Define an operation to clear the accumulated gradients for next batch.
+    zero_op = [v.assign(tf.zeros_like(v)) for v in accum_grads]
+
+    # Compute gradients.
+    grads = tf.gradients(reduced_loss, conv_trainable + fc_w_trainable + fc_b_trainable)
+   
+    # Accumulate and normalise the gradients.
+    accum_grads_op = [accum_grads[i].assign_add(grad / args.grad_update_every) for i, grad in
+                       enumerate(grads)]
+
+    grads_conv = accum_grads[:len(conv_trainable)]
+    grads_fc_w = accum_grads[len(conv_trainable) : (len(conv_trainable) + len(fc_w_trainable))]
+    grads_fc_b = accum_grads[(len(conv_trainable) + len(fc_w_trainable)):]
+
+    # Apply the gradients.
     train_op_conv = opt_conv.apply_gradients(zip(grads_conv, conv_trainable))
     train_op_fc_w = opt_fc_w.apply_gradients(zip(grads_fc_w, fc_w_trainable))
     train_op_fc_b = opt_fc_b.apply_gradients(zip(grads_fc_b, fc_b_trainable))
@@ -241,13 +279,28 @@ def main():
     for step in range(args.num_steps):
         start_time = time.time()
         feed_dict = { step_ph : step }
-        
+        loss_value = 0
+
+        # Clear the accumulated gradients.
+        sess.run(zero_op, feed_dict=feed_dict)
+       
+        # Accumulate gradients.
+        for i in range(args.grad_update_every):
+            _, l_val = sess.run([accum_grads_op, reduced_loss], feed_dict=feed_dict)
+            loss_value += l_val
+
+        # Normalise the loss.
+        loss_value /= args.grad_update_every
+
+        # Apply gradients.
         if step % args.save_pred_every == 0:
-            loss_value, preds, summary, _ = sess.run([reduced_loss, pred, merged_summary, train_op], feed_dict=feed_dict)
+            images, labels, summary, _ = sess.run([image_batch, label_batch,
+                                                   merged_summary, train_op], feed_dict=feed_dict)
             summary_writer.add_summary(summary, step)
             save(saver, sess, args.snapshot_dir, step)
         else:
-            loss_value, _ = sess.run([reduced_loss, train_op], feed_dict=feed_dict)
+            sess.run(train_op, feed_dict=feed_dict)
+
         duration = time.time() - start_time
         print('step {:d} \t loss = {:.3f}, ({:.3f} sec/step)'.format(step, loss_value, duration))
     coord.request_stop()

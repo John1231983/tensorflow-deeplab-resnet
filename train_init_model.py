@@ -159,21 +159,14 @@ def main():
 
     
     
-    # Predictions: ignoring all predictions with labels greater or equal than n_classes
     raw_prediction = tf.reshape(raw_output, [-1, n_classes])
-    #label_proc = prepare_label(label_batch, tf.pack(raw_output.get_shape()[1:3]), one_hot=False) # [batch_size, h, w]
     label_proc = tf.image.resize_nearest_neighbor(label_batch, tf.pack(raw_output.get_shape()[1:3]))
     raw_gt = tf.reshape(label_proc, [-1, n_classes])
-    #indices = tf.squeeze(tf.where(tf.less_equal(raw_gt, n_classes - 1)), 1)
-    #gt = tf.cast(tf.gather(raw_gt, indices), tf.int32)
-    #prediction = tf.gather(raw_prediction, indices)
                                                   
                                                   
     # Pixel-wise softmax loss.
-    #loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=prediction, labels=gt)
     softmax_probs = tf.nn.softmax(raw_prediction)
     loss = -tf.reduce_sum(raw_gt * tf.log(softmax_probs), axis=1)
-    #loss = tf.nn.softmax_cross_entropy_with_logits(logits=raw_prediction, labels=raw_gt)
     l2_losses = [args.weight_decay * tf.nn.l2_loss(v) for v in tf.trainable_variables() if 'weights' in v.name]
     reduced_loss = tf.reduce_mean(loss) + tf.add_n(l2_losses)
 
